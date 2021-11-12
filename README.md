@@ -60,7 +60,7 @@ Example：
 
 ##### 输出结果
 
-![image-20211112175131108](C:\Users\breeze\AppData\Roaming\Typora\typora-user-images\image-20211112175131108.png)
+![image-20211112175131108](README.assets/image-20211112175131108.png)
 
 不同进程之间用"------------------------" 分割
 
