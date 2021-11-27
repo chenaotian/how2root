@@ -85,7 +85,13 @@ EOF
 #1: gid
 function getGroupName()
 {
-    gidList=`cat /etc/group`
+    gidList=`cat /etc/group 2>/dev/null`
+    if [[ "$gidList" == "" ]]
+    then
+        echo "[!] read /etc/group error"
+        return 1
+    fi
+
     for g in ${gidList// /_}
     do
         groupName=${g%%:*}
@@ -103,7 +109,7 @@ function getGroupName()
 }
 
 #1: pid
-function getUGid()
+function onlyGetUid()
 {
     status=`cat /proc/$1/status`
     uid=${status#*Uid:}
@@ -113,8 +119,21 @@ function getUGid()
         uid=$u
         break
     done
+    echo $uid
+}
 
-    passwd=`cat /etc/passwd`
+#1: pid
+function getUGid()
+{
+    uid=`onlyGetUid $1`
+
+    passwd=`cat /etc/passwd 2>/dev/null`
+    if [[ "$passwd" == "" ]]
+    then
+        echo "[!] read /etc/passwd error"
+        return 1
+    fi
+
     for p in ${passwd// /_}
     do
         usrName=${p%%:*}
@@ -126,6 +145,11 @@ function getUGid()
         if [ $uuid == $uid ]
         then
             groupName=`getGroupName $ggid`
+            tmpRet=$?
+            if [ $tmpRet == 1 ]
+            then
+                return 1
+            fi
             echo $usrName" "$uid" "$groupName" "$ggid
             return 0
         fi
@@ -134,15 +158,23 @@ function getUGid()
     return 1
 }
 
+
+
 #1: pid
 function getExe()
 {
     if [ -f /proc/$1/exe ]
     then
-        exe=`ls -l /proc/$1/exe`
-        exe=${exe#*->}
+        exeresult=`ls -l /proc/$1/exe 2>/dev/null`
+        tmpRet=$(echo $exeresult | grep "->")
+        if [[ "$tmpRet" != "" ]]
+        then
+            exe=${exe#*->}
+        else
+            exe="Unknown"
+        fi
     else
-        exeLine="Unknown"
+        exe="Unknown"
     fi
     echo $exe
     return 0
@@ -156,8 +188,8 @@ function ifSthRight()
     if [ $3 == 'file' ]
     then
         ret=`ls -l $1`
-        fileOwnerName=`ls -l $1 | awk '{print $3}'`
-        fileGroupNmae=`ls -l $1 | awk '{print $4}'`
+        fileOwnerName=`ls -l $1  2>/dev/null| awk '{print $3}'`
+        fileGroupNmae=`ls -l $1  2>/dev/null| awk '{print $4}'`
         if [ -z "$ret" ]
         then
             echo "$1 isn't exist!"
@@ -174,9 +206,9 @@ function ifSthRight()
         fi
         dirName=${dirPath##*/}
         dirFatherPath=${dirPath%/*}"/"
-        ret=`ls -l $dirFatherPath | grep " $dirName$"`
-        fileOwnerName=`ls -l $dirFatherPath | grep " $dirName$" | awk '{print $3}' `
-        fileGroupNmae=`ls -l $dirFatherPath | grep " $dirName$" | awk '{print $4}'`  
+        ret=`ls -l $dirFatherPath  2>/dev/null| grep " $dirName$"`
+        fileOwnerName=`ls -l $dirFatherPath  2>/dev/null| grep " $dirName$" | awk '{print $3}' `
+        fileGroupNmae=`ls -l $dirFatherPath  2>/dev/null| grep " $dirName$" | awk '{print $4}'`  
         if [ -z "$ret" ]
         then
             echo "$1 dir isn't exist!"
@@ -364,7 +396,7 @@ function findCap()
     printStr="-----------------------------------------------------\n[+] PID: $1\n[+] EXE: "
     if [ -f /proc/$1/exe ]
     then
-        exe=`ls -l /proc/$1/exe`
+        exe=`ls -l /proc/$1/exe  2>/dev/null`
         exe=${exe#*->}
     else
         exe=""
@@ -382,7 +414,7 @@ function findCap()
 #3: targetCap
 function runcapscan()
 {
-    for dir in `ls /proc`
+    for dir in `ls /proc  2>/dev/null`
     do
         if [ -f /proc/$dir/status ]
         then
@@ -396,9 +428,11 @@ function runcapscan()
 function rootProcess()
 {
     ifPrint=0
+    uid=`onlyGetUid $1`
     ret=`getUGid $1`
+    tmpRet=$?
+
     usrName=${ret%% *}
-    uid=${ret#* }
     groupName=${uid#* }
     gid=${groupName#* }
     uid=${uid%% *}
@@ -413,18 +447,24 @@ function rootProcess()
 
     printStr="-----------------------------------------------------\n[+] PID: $1\n[+] UID: $uid $usrName\n[+] EXE: "
     exe=`getExe $1` 
-    #echo $exe
+    echo $exe
 
     #check exe file
     otherWritable=1
     groupWritable=2
     ownerIsntPUser=4
-    ifSthRight $exe $usrName file
-    tmpRet=$?
+    if [ $exe == "Unknown" ]
+    then
+        tmpRet=0
+    else
+        ifSthRight $exe $usrName file
+        tmpRet=$?
+    fi
+
     if [ $tmpRet != 0 ]
     then
         ifPrint=1
-        exe=`ls -al $exe`
+        exe=`ls -al $exe 2>/dev/null`
     fi
     printStr=$printStr$exe"\n"
 
@@ -447,7 +487,7 @@ function rootProcess()
     dirUserNotSame=0
     dirStr=""
 
-    env=`getEnvByStrings $1 PATH`
+    env=`getEnvByStrings $1 LD_LIBRARY_PATH`
     #echo $env
     if [ $? == 1 ]
     then
@@ -495,7 +535,7 @@ function searchRootProcess()
 {
     for dir in `ls /proc`
     do
-        if [ -f /proc/$dir/status ]
+        if [ -f /proc/$dir/status -a $(($dir)) == $3 ] 
         then
             rootProcess $dir $1 $2
         fi
@@ -508,6 +548,7 @@ processRoot=0
 noDetail=0
 processCap=0
 targetCap=""
+oneProcess=0
 while true;do
     case "$1" in
         --showall)
@@ -532,6 +573,9 @@ while true;do
         -d|--nodetail)
             noDetail=1
             shift 1;;    
+        -p)  #only for test
+            oneProcess=$2
+            shift 2;;
         --)
             shift ;
             break;;
@@ -546,7 +590,7 @@ while true;do
 done
 if [ $processRoot == 1 ]
 then
-    searchRootProcess $ifShowAll $noDetail
+    searchRootProcess $ifShowAll $noDetail $oneProcess
     exit 0
 elif [ $processCap == 1 ]
 then
@@ -554,7 +598,7 @@ then
     exit 0
 else
     runcapscan $ifShowAll $chooseCap $targetCap 
-    searchRootProcess $ifShowAll $noDetail
+    searchRootProcess $ifShowAll $noDetail $oneProcess
 fi
 
 
