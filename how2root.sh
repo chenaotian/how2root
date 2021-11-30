@@ -65,9 +65,6 @@ Mandatory arguments to long options are mandatory for short options too.
                         If other user can write them
                         If the same group user can write them
                         If the file/dir user is different from the process
-
-    -d,--nodetail   Don't show more detail information
-                    Now detail information only "If a env dir not exist"
     --------------------------------------------------------------------------------------------------
         --pc        Search progress capbilities which is not root
                     Default mode only search thread with danger capbilities like these:
@@ -86,7 +83,7 @@ EOF
 function getGroupName()
 {
     gidList=`cat /etc/group 2>/dev/null`
-    if [[ "$gidList" == "" ]]
+    if [ "$gidList" == "" ]
     then
         echo "[!] read /etc/group error"
         return 1
@@ -108,7 +105,36 @@ function getGroupName()
     return 1
 }
 
+#1: user name
+#echo: uid
+#ret: success/fail
+function uname2uid()
+{
+    passwd=`cat /etc/passwd 2>/dev/null`
+    if [ "$passwd" == "" ]
+    then
+        echo "[!] read /etc/passwd error"
+        return 1
+    fi
+
+    for p in ${passwd// /_}
+    do
+        usrName=${p%%:*}
+        uuid=${p#*:}
+        uuid=${uuid#*:}
+        uuid=${uuid%%:*}
+        if [ "$usrName" == "$1" ]
+        then
+            echo $uuid
+            return 0
+        fi
+    done
+    echo "[!] get uid ERROR"
+    return 1
+}
+
 #1: pid
+#echo:uid
 function onlyGetUid()
 {
     status=`cat /proc/$1/status`
@@ -123,12 +149,14 @@ function onlyGetUid()
 }
 
 #1: pid
+#echo: user name, uid, group name, gid
+#return: success 0/fail 1
 function getUGid()
 {
     uid=`onlyGetUid $1`
 
     passwd=`cat /etc/passwd 2>/dev/null`
-    if [[ "$passwd" == "" ]]
+    if [ "$passwd" == "" ]
     then
         echo "[!] read /etc/passwd error"
         return 1
@@ -148,7 +176,7 @@ function getUGid()
             tmpRet=$?
             if [ $tmpRet == 1 ]
             then
-                return 1
+                groupName="UNKNOWN"
             fi
             echo $usrName" "$uid" "$groupName" "$ggid
             return 0
@@ -161,15 +189,16 @@ function getUGid()
 
 
 #1: pid
+#echo: exe path or Unknown
 function getExe()
 {
     if [ -f /proc/$1/exe ]
     then
         exeresult=`ls -l /proc/$1/exe 2>/dev/null`
-        tmpRet=$(echo $exeresult | grep "->")
-        if [[ "$tmpRet" != "" ]]
+        tmpRet=$(echo $exeresult | grep "\->")
+        if [ "$tmpRet" != "" ]
         then
-            exe=${exe#*->}
+            exe=${exeresult#*->}
         else
             exe="Unknown"
         fi
@@ -183,37 +212,24 @@ function getExe()
 #1: file path
 #2: process user name
 #3: file type dir or file
+#return: mask value
 function ifSthRight()
 {
-    if [ $3 == 'file' ]
+    if [ "$3" == 'file' ]
     then
-        ret=`ls -l $1`
-        fileOwnerName=`ls -l $1  2>/dev/null| awk '{print $3}'`
-        fileGroupNmae=`ls -l $1  2>/dev/null| awk '{print $4}'`
+        ret=`ls -l $1 2>/dev/null `
+        fileOwnerName=`ls -l $1  2>/dev/null| awk '{print $3}' | head -n 1`
+        fileGroupNmae=`ls -l $1  2>/dev/null| awk '{print $4}' | head -n 1`
         if [ -z "$ret" ]
         then
             echo "$1 isn't exist!"
             return 0
         fi
-    elif [ $3 == 'dir' ]
-    then       
-        if [ ${1: -1: 1} == '/' ]
-        then            
-            dirPath=${1: 0: ${#1}-1}
-            
-        else
-            dirPath=$1
-        fi
-        dirName=${dirPath##*/}
-        dirFatherPath=${dirPath%/*}"/"
-        ret=`ls -l $dirFatherPath  2>/dev/null| grep " $dirName$"`
-        fileOwnerName=`ls -l $dirFatherPath  2>/dev/null| grep " $dirName$" | awk '{print $3}' `
-        fileGroupNmae=`ls -l $dirFatherPath  2>/dev/null| grep " $dirName$" | awk '{print $4}'`  
-        if [ -z "$ret" ]
-        then
-            echo "$1 dir isn't exist!"
-            return 0
-        fi
+    elif [ "$3" == 'dir' ]
+    then
+        ret=`ls -al $1 | grep " \.$"| head -n 1 `       
+        fileOwnerName=`ls -al $1 | grep " \.$" | awk '{print $3}' | head -n 1 `
+        fileGroupNmae=`ls -al $1 | grep " \.$" | awk '{print $4}' | head -n 1`          
     fi
 
     thisType=${ret: 0: 1}
@@ -241,15 +257,66 @@ function ifSthRight()
         result=$(($result|$groupWritable))
     fi
 
-    if [[ $fileOwnerName != $2 ]]
+    if [ "$fileOwnerName" != "$2" -a  "$fileOwnerName" != "root" ]
     then
         result=$(($result|$fileOwnerIsntPOwner))
     fi
     return $result
 }
 
+#1: dir path
+#ret: yes 0/no 1
+function ifDirExist()
+{
+    ret=`ls -al $1 2>/dev/null`
+    if [ "$ret" == "" -a $? != 0 ]
+    then    
+        return 1
+    fi
+    return 0
+}
+
+#1: dir path
+#echo: exist father dir path
+function getExistDir()
+{
+    dirFatherPath=${1%/*}
+    #echo $dirFatherPath
+    ifDirExist $dirFatherPath"/"
+    if [ $? == 1 ]
+    then
+        getExistDir $dirFatherPath
+    else
+        echo $dirFatherPath"/"
+    fi
+}
+
+#1: dir/file path
+#ret: can / cannot make
+function ifCouldMade()
+{
+    fatherDir=`getExistDir $1`
+    fatherDirInfo=`ls -al $fatherDir | grep " \.$" `
+    ownRWX=${fatherDirInfo: 1: 3}
+    groupRWX=${fatherDirInfo: 4: 3}
+    otherRWX=${fatherDirInfo: 7: 3}
+
+    ownUser=`ls -al $fatherDir | grep " \.$" | awk '{print $3}' | head -n 1`
+    groupName=`ls -al $fatherDir | grep " \.$" | awk '{print $4}' | head -n 1`
+    if [ "$ownUser" != "root" -a ${ownRWX: 1: 1} == 'w' ]
+    then
+        return 1
+    elif [ ${otherRWX: 1: 1} == 'w' -o ${groupRWX: 1: 1} == 'w'  ]
+    then
+        return 1
+    fi
+    return 0
+}
+
 #1: dir list
 #2: user name
+#echo: dir path
+#return: mask value
 function someDirCheck()
 {
     result=0
@@ -262,9 +329,27 @@ function someDirCheck()
     dirGroupUserWriteable=2
     #file owner isn't the process user
     dirOwnerIsntPUser=4
+    #dir not exist but could be maked
+    dirMakable=8
 
     for dir in $dirList
     do
+        ifDirExist $dir
+        tmpRet=$?
+        #if dir not exist
+        if [ $tmpRet == 1 ]
+        then
+            #if dir could be made
+            ifCouldMade $dir            
+            if [ $? == 1  ]
+            then
+                result=$(($result|$dirMakable))
+                printStr=$printStr"$dir "
+            fi
+            continue
+        fi
+
+        #dir exist, if dir's rwx is right
         ifSthRight $dir $usrName dir
         tmpRet=$?
         if [ $tmpRet == 0 ]
@@ -293,14 +378,17 @@ function someDirCheck()
     return $result
 }
 
+
 #1: pid
 #2: env word
+#echo: env string
+#ret: success 0/fail 1
 function getEnvByStrings()
 {
     strings=`which strings`
     if [ $? != 0 ]
     then
-        echo "ERROR: there isn't strings"
+        echo "ERROR: there isn't strings command"
         return 1
     fi
 
@@ -322,6 +410,7 @@ function getEnvByStrings()
 #2: ifShowAll
 #3: ifChooseCap
 #4: targetCap
+#echo: process capbilities information
 function findCap()
 {
     status=`cat /proc/$1/status`
@@ -428,15 +517,16 @@ function runcapscan()
 function rootProcess()
 {
     ifPrint=0
-    uid=`onlyGetUid $1`
     ret=`getUGid $1`
     tmpRet=$?
 
     usrName=${ret%% *}
+    uid=${ret#*}
     groupName=${uid#* }
     gid=${groupName#* }
     uid=${uid%% *}
     groupName=${groupName%% *}
+    uid=`onlyGetUid $1`
 
     #echo "pid is: "$1
     if [ $2 == 0 -a $(($uid)) != 0 ]
@@ -447,41 +537,62 @@ function rootProcess()
 
     printStr="-----------------------------------------------------\n[+] PID: $1\n[+] UID: $uid $usrName\n[+] EXE: "
     exe=`getExe $1` 
-    echo $exe
+    exeInfo=`ls -l $exe 2>/dev/null`
 
-    #check exe file
+    #echo $exe,$1,$exeInfo
+
+    #check exe file-------------------------------------
     otherWritable=1
     groupWritable=2
     ownerIsntPUser=4
+    dirMakable=8
+    #/proc/pid/exe not exist,
     if [ $exe == "Unknown" ]
     then
         tmpRet=0
+    elif [ "$exeInfo" == "" ]  #/proc/pid/exe exist but real exe not exist
+    then
+        #if real exe's dir have x, that if real exe may be made
+        ifCouldMade $exe            
+        if [ $? == 1  ]
+        then
+            tmpRet=8
+            ifPrint=1
+        fi
     else
         ifSthRight $exe $usrName file
         tmpRet=$?
     fi
 
-    if [ $tmpRet != 0 ]
+    #if real exe not exist, ls -al not have print
+    if [ $tmpRet != 0 -a $tmpRet != 8 ]
     then
         ifPrint=1
         exe=`ls -al $exe 2>/dev/null`
     fi
     printStr=$printStr$exe"\n"
 
-    if [ $(($tmpRet&$otherWritable)) != 0 ]
+    if [ $tmpRet != 0 ]
     then
-        printStr=$printStr"\t[-] Other user can write this EXE!\n"
-    fi
-    if [ $(($tmpRet&$groupWritable)) != 0 ]
-    then
-        printStr=$printStr"\t[-] Same group user can write this EXE!\n"
-    fi
-    if [ $(($tmpRet&$ownerIsntPUser)) != 0 ]
-    then
-        printStr=$printStr"\t[-] Different user between file and process!\n"
+        if [ $(($tmpRet&$otherWritable)) != 0 ]
+        then
+            printStr=$printStr"\t[-] Other user can write this EXE!\n"
+        fi
+        if [ $(($tmpRet&$groupWritable)) != 0 ]
+        then
+            printStr=$printStr"\t[-] Same group user can write this EXE!\n"
+        fi
+        if [ $(($tmpRet&$ownerIsntPUser)) != 0 ]
+        then
+            printStr=$printStr"\t[-] Different user between file and process!\n"
+        fi
+        if [ $(($tmpRet&$dirMakable)) != 0 ]
+        then
+            printStr=$printStr"\t[-] Exe not exisst but could be made!\n"
+        fi   
     fi
 
-    #check env LD_LIBRARY_PATH
+    #check env LD_LIBRARY_PATH ----------------------------------------
     dirOtherUserWriteable=0
     dirGroupUserWriteable=0
     dirUserNotSame=0
@@ -512,32 +623,30 @@ function rootProcess()
             then
                 printStr=$printStr"\t[-] Different user between any env dir's user and this process user!\n"
             fi
-        else
-            if [ -n "$printStr" -a $3 == 0 ]
+            if [ $(($tmpRet&$dirMakable)) != 0 ]
             then
-                ifPrint=1
-                printStr=$printStr"[+] ENV: $dirStr\n"
-            fi
+                printStr=$printStr"\t[-] Dir not exisst but could be made!\n"
+            fi            
         fi
     fi
 
-
-
+    #final echo------------------------------------------------
     if [ $ifPrint != 0 ]
     then
         echo -e $printStr
     fi
-
-
 }
 
 function searchRootProcess()
 {
     for dir in `ls /proc`
     do
-        if [ -f /proc/$dir/status -a $(($dir)) == $3 ] 
+        if [ -f /proc/$dir/status ]
         then
-            rootProcess $dir $1 $2
+            if [ $(($dir)) == $2  -o $2 == 0 ] 
+            then
+                rootProcess $dir $1 
+            fi
         fi
     done
 }
@@ -569,10 +678,7 @@ while true;do
             shift 1;;   
         --pc)
             processCap=1
-            shift 1;;
-        -d|--nodetail)
-            noDetail=1
-            shift 1;;    
+            shift 1;;   
         -p)  #only for test
             oneProcess=$2
             shift 2;;
@@ -590,7 +696,7 @@ while true;do
 done
 if [ $processRoot == 1 ]
 then
-    searchRootProcess $ifShowAll $noDetail $oneProcess
+    searchRootProcess $ifShowAll  $oneProcess
     exit 0
 elif [ $processCap == 1 ]
 then
@@ -598,7 +704,7 @@ then
     exit 0
 else
     runcapscan $ifShowAll $chooseCap $targetCap 
-    searchRootProcess $ifShowAll $noDetail $oneProcess
+    searchRootProcess $ifShowAll  $oneProcess
 fi
 
 
