@@ -280,7 +280,12 @@ function ifDirExist()
 #echo: exist father dir path
 function getExistDir()
 {
-    dirFatherPath=${1%/*}
+    dir=$1
+    if [ ${1: 0: 1} != "/" ]
+    then
+        dir="/"$1
+    fi
+    dirFatherPath=${dir%/*}
     #echo $dirFatherPath
     ifDirExist $dirFatherPath"/"
     if [ $? == 1 ]
