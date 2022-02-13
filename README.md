@@ -7,7 +7,9 @@
 
 之所以用shell脚本写是因为这样就**能在不同架构、普通linux服务器和嵌入式设备之间通用，所以会用支持busybox 的shell 写**，所以代码看起来非常的蠢逼，当然一方面也有我菜的原因。
 
-ps: 目前只针对进程capbilities 进行搜索
+ps: 目前只针对进程capbilities 和环境变量 进行搜索
+
+最新更新：支持搜索所有root 进程的LD_LIBRARY_PATH环境变量，查看是否有危险目录/库文件。
 
 后续可能更新点：
 
@@ -26,15 +28,32 @@ ps: 目前只针对进程capbilities 进行搜索
     CAP_CHOWN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER CAP_SETGID CAP_SETUID CAP_NET_ADMIN CAP_IPC_OWNER CAP_SYS_MODULE CAP_SYS_PTRACE CAP_SETFCAP
     ```
 
+- 针对 **root 进程** 进行搜索，搜索所有有LD_LIBRARY_PATH 环境变量的进程，并查看环境变量指向目录是否危险：
+  - 其他用户可以在目录中添加文件(可控)
+  - 同组用户可以在目录中添加文件(可控)
+  - 属主身份和进程不同
+
 #### 使用方法
 
 ##### 输入参数
 
 拥有如下参数：
 
-- --showroot  
+公共部分：
 
-  对全进程 (包括root进程) 进行搜索，默认情况下 (不加这个参数) 只搜索非root 进程 (进程uid 不等于0) ，毕竟root 进程本来就是最高权限，拥有什么cap 都是没有意义的。
+- -h / --help 
+
+  查看帮助
+
+- --showall
+
+  对全进程 (包括root进程) 进行搜索
+
+  capbilities 在默认情况下 (不加这个参数) 只搜索非root 进程 (进程uid 不等于0) ，毕竟root 进程本来就是最高权限，拥有什么cap 都是没有意义的。 
+
+  环境变量搜索默认情况下只看root进程，拥有这个会搜索全进程
+
+capbilities 部分
 
 - -c / --cap   
 
@@ -50,6 +69,12 @@ ps: 目前只针对进程capbilities 进行搜索
 - -a / --all 
 
   讲搜索范围改为全部capbilities，只要进程拥有任意一个capbility ，就会加入到搜索结果之中。
+
+环境变量部分
+
+- --pr
+
+  搜索所有root 进程并且存在LD_LIBRARY_PATH 环境变量的，并查看环境变量的目录，是否有风险(权限配置不当)。
 
 Example：
 
